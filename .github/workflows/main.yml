@@ -1,0 +1,72 @@
+name: Build Tiny10 x86
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'tiny10-x86-*'
+
+jobs:
+  build-tiny10-x86:
+    name: Build Tiny10 x86 (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 安装 ADK 部署工具 (获取 oscdimg)
+        run: |
+          $adkUrl = "https://go.microsoft.com/fwlink/?linkid=2289980"
+          Invoke-WebRequest -Uri $adkUrl -OutFile "$env:TEMP\adksetup.exe"
+          Start-Process -FilePath "$env:TEMP\adksetup.exe" -ArgumentList "/quiet /features OptionId.DeploymentTools" -Wait
+          $oscdimgDir = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Deployment Tools\amd64\Oscdimg"
+          $oscdimgDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
+
+      - name: 下载 Tiny10-Builder 脚本
+        run: |
+          $scriptUrl = "https://raw.githubusercontent.com/yuzorhan/Tiny10-Builder/main/Tiny10_Builder_V6.ps1"
+          Invoke-WebRequest -Uri $scriptUrl -OutFile "$env:TEMP\Tiny10_Builder.ps1"
+        shell: powershell
+
+      - name: 下载 Windows 10 官方 ISO (x64)
+        run: |
+          $fidoUrl = "https://github.com/pbatard/Fido/releases/latest/download/Fido.ps1"
+          Invoke-WebRequest -Uri $fidoUrl -OutFile "$env:TEMP\Fido.ps1"
+          & "$env:TEMP\Fido.ps1" -Win 10 -Lang Chinese -Ed Pro -Arch x64 -GetUrl | Out-File "$env:TEMP\win10_url.txt"
+          $win10Url = Get-Content "$env:TEMP\win10_url.txt"
+          Invoke-WebRequest -Uri $win10Url -OutFile "$env:TEMP\Win10_x64.iso"
+        shell: powershell
+
+      - name: 运行 Tiny10 Builder
+        run: |
+          $mountResult = Mount-DiskImage -ImagePath "$env:TEMP\Win10_x64.iso" -PassThru
+          $driveLetter = ($mountResult | Get-Volume).DriveLetter
+          Write-Host "ISO 已挂载到 $driveLetter 盘"
+
+          & "$env:TEMP\Tiny10_Builder.ps1" -ISOPath "$($driveLetter):\"
+
+          Dismount-DiskImage -ImagePath "$env:TEMP\Win10_x64.iso"
+        shell: powershell
+
+      - name: 查找生成的 ISO
+        run: |
+          $iso = Get-ChildItem -Path "$env:TEMP" -Filter "*.iso" -Recurse |
+                 Where-Object { $_.Name -notlike "*Win10_x64*" } |
+                 Select-Object -First 1
+          if ($iso) {
+            Write-Host "找到生成的 ISO: $($iso.FullName)"
+            echo "OUTPUT_ISO=$($iso.FullName)" >> $env:GITHUB_ENV
+          } else {
+            Write-Error "未找到生成的 ISO 文件"
+            exit 1
+          }
+        shell: powershell
+
+      - name: 上传 Tiny10 x86 ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tiny10-x86-ISO
+          path: ${{ env.OUTPUT_ISO }}
+          retention-days: 30
